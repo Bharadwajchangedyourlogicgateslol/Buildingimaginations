@@ -8,9 +8,7 @@ from tkinter import (Tk, Label, Button, Spinbox,
                      IntVar, Frame)
 from tkinter.ttk import Progressbar, Style
 import threading
-
-# You'll need: pip install pymupdf
-import fitz  # PyMuPDF
+import fitz
 
 TEMP_IMG_DIR = 'temp_pages'
 
@@ -21,8 +19,7 @@ class PDF2EPUBApp:
         master.geometry("480x320")
         master.configure(bg="#ffffff")
         self.selected_files = []
-
-        # UI Style
+      
         style = Style()
         style.theme_use('default')
         style.configure("TButton", font=("Segoe UI", 10), padding=6)
@@ -34,8 +31,7 @@ class PDF2EPUBApp:
 
         self.browse_button = Button(master, text="Browse PDFs", command=self.browse_files)
         self.browse_button.pack(pady=8)
-
-        # DPI
+      
         dpi_frame = Frame(master, bg="#ffffff")
         dpi_frame.pack(pady=5)
         Label(dpi_frame, text="DPI:", bg="#ffffff").pack(side="left")
@@ -91,7 +87,6 @@ class PDF2EPUBApp:
         if not os.path.exists(TEMP_IMG_DIR):
             os.makedirs(TEMP_IMG_DIR)
 
-        # === FIXED: Real PDF to Image rendering using PyMuPDF ===
         doc = fitz.open(pdf_path)
         total = len(doc)
         self.progress['maximum'] = total
@@ -101,7 +96,6 @@ class PDF2EPUBApp:
             self.status_var.set(f"{base}: page {idx+1}/{total}")
             self.master.update_idletasks()
 
-            # Render page to image
             pix = page.get_pixmap(dpi=dpi)
             img_path = os.path.join(TEMP_IMG_DIR, f"page_{idx+1:03d}.jpg")
             pix.save(img_path)
@@ -111,7 +105,6 @@ class PDF2EPUBApp:
 
         doc.close()
 
-        # === Create EPUB ===
         book = epub.EpubBook()
         book.set_identifier(base)
         book.set_title(base)
@@ -146,7 +139,6 @@ class PDF2EPUBApp:
 
         epub.write_epub(out_path, book)
 
-        # Cleanup
         shutil.rmtree(TEMP_IMG_DIR, ignore_errors=True)
         self.status_var.set(f"Finished: {base}.epub")
 
