@@ -42,8 +42,8 @@ pyautogui.FAILSAFE = True
 # ============== NEW SMOOTHING VARIABLES ==============
 prev_screen_x = screen_w / 2
 prev_screen_y = screen_h / 2
-smooth_factor = 0.65  # Lower = smoother (0.55 - 0.75 recommended)
-min_move_threshold = 3  # Reduces jitter
+smooth_factor = 0.65
+min_move_threshold = 3
 
 # State variables
 landmark_history = []
@@ -53,8 +53,9 @@ prev_hand_y = None
 clicking = False
 dragging = False
 right_clicking = False
+pinch_start_time = None
 double_click_debounce = 0.4
-sensitivity = 1.4  # Increased for better responsiveness
+sensitivity = 1.4
 click_threshold = 25
 right_click_threshold = 25
 alpha = 0.3
@@ -79,19 +80,16 @@ def smooth_landmarks(lm, history, max_len=5, alpha=0.3):
     if not history:
         history.append(np.array([[l.x, l.y, l.z] for l in lm]))
         return lm
-
     current = np.array([[l.x, l.y, l.z] for l in lm])
     history.append(current)
     if len(history) > max_len:
         history.pop(0)
-
     smoothed = np.copy(current)
     for i in range(len(lm)):
         if len(history) > 1:
             smoothed[i] = alpha * current[i] + (1 - alpha) * np.mean([h[i] for h in history[:-1]], axis=0)
         else:
             smoothed[i] = current[i]
-
     for i in range(len(lm)):
         lm[i].x, lm[i].y, lm[i].z = smoothed[i]
     return lm
@@ -117,39 +115,32 @@ def draw_trail(img, points, max_points=20):
         cv2.line(img, points[i - 1], points[i], (0, 255, 255), thickness)
 
 
-# New smoothing function for mouse cursor
 def smooth_position(new_x, new_y):
     global prev_screen_x, prev_screen_y
     smoothed_x = prev_screen_x * (1 - smooth_factor) + new_x * smooth_factor
     smoothed_y = prev_screen_y * (1 - smooth_factor) + new_y * smooth_factor
-
     if abs(smoothed_x - prev_screen_x) < min_move_threshold:
         smoothed_x = prev_screen_x
     if abs(smoothed_y - prev_screen_y) < min_move_threshold:
         smoothed_y = prev_screen_y
-
     prev_screen_x, prev_screen_y = smoothed_x, smoothed_y
     return int(smoothed_x), int(smoothed_y)
 
 
 def create_config_ui():
     root = ttkb.Window(themename="darkly")
-    root.title("Hand Tracker Control")
+    root.title("Hand Control Settings")
     root.geometry("350x280")
-
-    tk.Label(root, text="✋ Hand Tracker Settings", font=("Helvetica", 14, "bold")).pack(pady=10)
+    tk.Label(root, text="✋ Hand Control Settings", font=("Helvetica", 14, "bold")).pack(pady=10)
     tk.Label(root, text="Mouse Sensitivity").pack(pady=5)
     sensitivity_scale = ttkb.Scale(root, from_=0.5, to=2.5, orient="horizontal", value=sensitivity)
     sensitivity_scale.pack(pady=5)
-
     tk.Label(root, text="Left Click Threshold").pack(pady=5)
     click_scale = ttkb.Scale(root, from_=15, to=40, orient="horizontal", value=click_threshold)
     click_scale.pack(pady=5)
-
     tk.Label(root, text="Right Click Threshold").pack(pady=5)
     right_click_scale = ttkb.Scale(root, from_=15, to=40, orient="horizontal", value=right_click_threshold)
     right_click_scale.pack(pady=5)
-
     return root, sensitivity_scale, click_scale, right_click_scale
 
 
@@ -160,7 +151,6 @@ try:
     while True:
         success, img = cap.read()
         if not success:
-            print("Warning: Failed to read frame.")
             continue
 
         img = cv2.flip(img, 1)
@@ -172,28 +162,20 @@ try:
             try:
                 hand_lm = smooth_landmarks(results.multi_hand_landmarks[0].landmark, landmark_history)
 
-                # ============== IMPROVED MOUSE MOVEMENT ==============
                 index_x = hand_lm[8].x
                 index_y = hand_lm[8].y
-
                 target_x = int(index_x * screen_w * sensitivity)
                 target_y = int(index_y * screen_h * sensitivity)
-
-                # Strong clamping - cursor stays inside screen
                 target_x = max(5, min(screen_w - 5, target_x))
                 target_y = max(5, min(screen_h - 5, target_y))
 
-                # Apply smoothing
                 screen_x, screen_y = smooth_position(target_x, target_y)
-
                 pyautogui.moveTo(screen_x, screen_y)
 
-                # Landmark points for gestures
                 index_tip = to_px(hand_lm, 8, w, h)
                 thumb_tip = to_px(hand_lm, 4, w, h)
                 middle_tip = to_px(hand_lm, 12, w, h)
 
-                # Draw landmarks and trail
                 mp_draw.draw_landmarks(
                     img, results.multi_hand_landmarks[0], mp_hands.HAND_CONNECTIONS,
                     mp_draw.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=4),
@@ -203,43 +185,47 @@ try:
                 trail_points.append((index_tip[0], index_tip[1]))
                 draw_trail(img, trail_points)
 
-                # Left click and drag
-                if distance(index_tip, thumb_tip) < click_threshold:
-                    if not clicking and not dragging:
-                        pyautogui.mouseDown(button='left')
+                pinch_distance = distance(index_tip, thumb_tip)
+
+                # ================== NEW GESTURE LOGIC ==================
+                if pinch_distance < click_threshold:
+                    if pinch_start_time is None:
+                        pinch_start_time = time.time()
+
+                    hold_duration = time.time() - pinch_start_time
+
+                    if hold_duration >= 4.0 and not dragging:  # Hold 4 seconds → Drag
+                        if not dragging:
+                            pyautogui.mouseDown(button='left')
+                            dragging = True
+                            cv2.putText(img, "DRAG MODE", (index_tip[0], index_tip[1] - 30),
+                                        cv2.FONT_HERSHEY_DUPLEX, 1, (0, 0, 255), 2)
+                    elif hold_duration < 4.0 and not clicking and not dragging:  # Quick pinch → Click
+                        pyautogui.click(button='left')
                         clicking = True
-                        dragging = True
                         if click_sound:
                             click_sound.play()
-                    cv2.putText(img, "LEFT CLICK / DRAG", (index_tip[0], index_tip[1] - 30),
-                                cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 255), 2)
+                        cv2.putText(img, "LEFT CLICK", (index_tip[0], index_tip[1] - 30),
+                                    cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 255), 2)
                 else:
-                    if clicking or dragging:
+                    # Release
+                    if dragging:
                         pyautogui.mouseUp(button='left')
-                        clicking = False
                         dragging = False
+                    clicking = False
+                    pinch_start_time = None
 
-                # Right click
+                # Right Click
                 if distance(middle_tip, thumb_tip) < right_click_threshold:
                     if not right_clicking:
                         pyautogui.click(button='right')
                         right_clicking = True
                         if right_click_sound:
                             right_click_sound.play()
-                    cv2.putText(img, "RIGHT CLICK", (middle_tip[0], middle_tip[1] - 30),
-                                cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 0), 2)
+                        cv2.putText(img, "RIGHT CLICK", (middle_tip[0], middle_tip[1] - 30),
+                                    cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 0), 2)
                 else:
                     right_clicking = False
-
-                # Double-click logic
-                if distance(index_tip,
-                            thumb_tip) < click_threshold and time.time() - prev_click_time < double_click_debounce:
-                    pyautogui.doubleClick()
-                    prev_click_time = 0
-                    if click_sound:
-                        click_sound.play()
-                elif distance(index_tip, thumb_tip) < click_threshold:
-                    prev_click_time = time.time()
 
                 # Scroll with fist
                 if is_fist(hand_lm):
@@ -259,29 +245,24 @@ try:
                     scroll_mode = False
 
             except Exception as e:
-                print(f"Error processing landmarks: {e}")
-                cv2.putText(img, "Detection Error", (10, 90), cv2.FONT_HERSHEY_DUPLEX, 1, (0, 0, 255), 2)
+                print(f"Error: {e}")
 
-        # Overlay texts
-        cv2.putText(img, "Hand Control", (10, 30), cv2.FONT_HERSHEY_DUPLEX, 1, (255, 100, 100), 2,
-                    cv2.LINE_AA)
+        # Overlay
+        cv2.putText(img, "Hand Control", (10, 30), cv2.FONT_HERSHEY_DUPLEX, 1, (255, 100, 100), 2, cv2.LINE_AA)
         cv2.putText(img, "ESC to Quit", (10, 60), cv2.FONT_HERSHEY_DUPLEX, 0.8, (255, 255, 255), 1, cv2.LINE_AA)
         cv2.rectangle(img, (0, 0), (w, 80), (50, 50, 50, 100), -1)
 
-        cv2.imshow("Hand Tracker", img)
+        cv2.imshow("Hand Control", img)
 
-        # Update settings from UI
+        # Update UI
         sensitivity = sensitivity_scale.get()
         click_threshold = click_scale.get()
         right_click_threshold = right_click_scale.get()
         root.update()
 
-        # Exit condition
         if keyboard.is_pressed('esc') or cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-except KeyboardInterrupt:
-    print("Program terminated by user.")
 except Exception as e:
     print(f"Unexpected error: {e}")
 finally:
